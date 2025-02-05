@@ -39,8 +39,6 @@ if __name__ == "__main__":
         generation_freq=None,
         responses_save_path=f"results/responses_w_finetuned_{experiment_descriptor}.json",
         model_save_path=f"checkpoints/finetuned_{experiment_descriptor}.pth",
-        inference_only=True,
-        preload_model=True,
         log_to_clearml=False,
         enable_gradient_checkpointing=True,
         use_bf16=True,

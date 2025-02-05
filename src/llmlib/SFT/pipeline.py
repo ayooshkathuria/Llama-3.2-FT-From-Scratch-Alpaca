@@ -25,7 +25,6 @@ class SFTPipeline:
     def __init__(self, config):
         self.config = config.__dict__
 
-    # Write a function to download the data using clearml storaga manager.
     def load_data(self, data_path: str):
         """
         Download the data from the provided link and store it in the specified path.

@@ -11,7 +11,7 @@ if __name__ == "__main__":
     #################### DEFINE THE EXPERIMENT CONFIG ########################
     ##########################################################################
 
-    experiment_descriptor = "llama3.2-1B-ft-alpaca-70k-epochs-test"
+    experiment_descriptor = "llama3.2-1B-ft-alpaca-70k-epochs"
 
     full_alpaca_config = FineTuningConfig(
         project_name="llama-instruction-finetuning",
@@ -39,7 +39,7 @@ if __name__ == "__main__":
         generation_freq=None,
         responses_save_path=f"results/responses_w_finetuned_{experiment_descriptor}.json",
         model_save_path=f"checkpoints/finetuned_{experiment_descriptor}.pth",
-        log_to_clearml=True,
+        log_to_clearml=False,
         enable_gradient_checkpointing=True,
         use_bf16=True,
         use_explicit_bfloat16=False,
