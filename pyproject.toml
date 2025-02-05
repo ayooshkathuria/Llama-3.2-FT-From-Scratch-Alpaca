@@ -1,7 +1,7 @@
 [project]
-name = "llama3-2-ft"
+name = "Llama-3.2-FT-From-Scratch-Alpaca"
 version = "0.1.0"
-description = "A project that implements Llama 3.2 from scratch and finetunes it on Alpca-style data."
+description = "A project that implements Llama 3.2 from scratch and finetunes it on Alpaca-style data."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

@@ -2,7 +2,7 @@
 
 This repository houses my implementation of Llama 3.2Bfrom scratch. Currently, it just contains the ability to finetune Llama 3.2 (1B and 3B) variants on an Alpaca like finetuning dataset. In future, I intend to add RL based alignment techniques too. 
 
-## Intstallation
+## Installation
 
 The recommended way to setup the code is using `uv`, which is a modern python dependency management tool. 
 Only python 3.10.x and 3.11.x are supported through UV. 
@@ -156,7 +156,19 @@ All the paths, when not absolute, are relative to the root of the project.
 There are three training scripts available for now. One that finetunes, Llama 3.2 1B, Llama 3.2 1B with LoRa and Llama 3.2 3B with Lora. Te first two were trained with a max sequence length of 512 and the other with 256. This is what I could fit in my 24 GB GPU. 
 
 
-### Evaluation
+### Llama 3.2 1B
+
+![Llama 3.2 1B](images/Llama_3_2_1B.png)
+
+### Llama 3.2 1B W/ LoRA
+
+![Llama 3.2 1B W/ LoRA](images/Llama3_2_1B_Lora.png)
+
+### Llama 3.2 3B W/ LoRA
+![Llama 3.2 3B W/ LoRA](images/Llama3_2_3B_Lora.png)
+
+ 
+## Evaluation
 
 We use LLM-as-a-Judge as a way to evaluate the output of the instructio fine-funed model. There are two ways you can go about it. 
 
