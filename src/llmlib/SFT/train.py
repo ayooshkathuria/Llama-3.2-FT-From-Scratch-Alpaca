@@ -1,47 +1,16 @@
-import copy
 import functools
-import gc
-import json
-
-# Set the envrironment variablee PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-# to allow for dynamic memory allocation on the GPU.
-import os
-import random
-import string
 import time
-import urllib
-from dataclasses import dataclass, field
 
 import bitsandbytes as bnb
-import psutil
 import tiktoken
 import torch
-from clearml import StorageManager, Task
-from huggingface_hub import hf_hub_download
-from safetensors.torch import load_file
-from torch.amp import GradScaler, autocast
-from torch.optim.lr_scheduler import LambdaLR
-
-# torch.set_float32_matmul_precision("high")
-from torch.utils.checkpoint import checkpoint
+from clearml import Task
 from tqdm import tqdm, trange
-from transformers import GPT2Model
 
-from llmlib import GPT_ROOT
-from llmlib.Llama.llama import Llama3
-from llmlib.Llama.preloaded_llama import load_hf_weights_into_llama
-from llmlib.Llama.tokenizers import Llama3Tokenizer
-from llmlib.utils.eval import (
-    evaluate_w_ollama,
-    evaluate_with_promestheus,
-    generate_response,
-)
+from llmlib.utils.eval import generate_response
 from llmlib.utils.lr_schedulers import WarmupCosineAnnealingLR
-from llmlib.utils.models import get_device, model_configs
+from llmlib.utils.models import get_device
 from llmlib.utils.prompts import format_w_alpaca
-from llmlib.utils.utils import FineTuningConfig, flatten_dict
-
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
 class InstructionDataset:
@@ -146,6 +115,77 @@ def custom_collate_fn(
     return inputs_tensor, targets_tensor
 
 
+def create_dataloaders(train_data, test_data, val_data, tokenizer, config):
+    """
+    Create dataloaders for the training, testing, and validation sets.
+
+    Parameters
+    ----------
+    train_data : list
+        The training set.
+    test_data : list
+        The testing set.
+    val_data : list
+        The validation set.
+    tokenizer : object
+        The tokenizer object to encode the data.
+    config : dict
+        The configuration dictionary.
+
+    Returns
+    -------
+    train_dataloader : torch.utils.data.DataLoader
+        The dataloader for the training set.
+    test_dataloader : torch.utils.data.DataLoader
+        The dataloader for the testing set.
+    val_dataloader : torch.utils.data.DataLoader
+        The dataloader for the validation set.
+    """
+
+    torch.manual_seed(config["seed"])
+
+    eval_batch_size = config["eval_batch_size"]
+    batch_size = config["batch_size"] // config.get("gradient_accumulation_steps", 1)
+
+    collate_fn = functools.partial(
+        custom_collate_fn,
+        allowed_max_length=config["max_seq_len"],
+    )
+
+    train_dataset = InstructionDataset(train_data, tokenizer)
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        drop_last=True,
+    )
+
+    test_dataset = InstructionDataset(test_data, tokenizer)
+    test_dataloader = torch.utils.data.DataLoader(
+        test_dataset,
+        batch_size=eval_batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        drop_last=False,
+    )
+
+    val_dataset = InstructionDataset(val_data, tokenizer)
+    val_dataloader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=eval_batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        drop_last=False,
+    )
+
+    return {
+        "train": train_dataloader,
+        "test": test_dataloader,
+        "val": val_dataloader,
+    }
+
+
 def compute_loss(model, dataloader, device="cpu", num_batches=None):
     model.eval()
 
@@ -227,7 +267,7 @@ def configure_optimizer(
     return optimizer
 
 
-def llama_trainer(
+def sft_trainer(
     config: dict,
     model: torch.nn.Module,
     train_dataloader: torch.utils.data.DataLoader,
@@ -426,358 +466,13 @@ def llama_trainer(
             for entry in test_data[:3]:
                 prompt = format_w_alpaca(entry)
 
-                generate_response(model, tokenizer, prompt, get_device())
+                model_generation = generate_response(
+                    model, tokenizer, prompt, get_device()
+                )
 
             print("#######################################################")
 
-            # if config["log_to_clearml"]:
-            #     logger.report_text("model_generation", model_generation, step=step)
+            if config["log_to_clearml"]:
+                logger.report_text("model_generation", model_generation, step=step)
 
     return model
-
-
-# Write a function to download the data using clearml storaga manager.
-def load_data(data_path: str):
-    """
-    Download the data from the provided link and store it in the specified path.
-
-    Parameters
-    ----------
-    data_path : str
-        The path where the data will be stored.
-    """
-
-    # Since the file is a json file, we use json to read the object.
-    data = json.load(open(data_path))
-
-    return data
-
-
-def split_data(dataset, train_size=0.9, test_size=0.05):
-    """
-    Split the dataset into training, testing, and validation sets.
-
-    Parameters
-    ----------
-    dataset : list
-        The dataset to be split.
-    train_size : float, optional
-        The proportion of the dataset to include in the training set (default is 0.9).
-    test_size : float, optional
-        The proportion of the dataset to include in the testing set (default is 0.05).
-
-    Returns
-    -------
-    train_data : list
-        The training set.
-    test_data : list
-        The testing set.
-    val_data : list
-        The validation set.
-    """
-
-    train_portion = int(len(dataset) * train_size)
-    test_portion = int(len(dataset) * test_size)
-
-    train_data = dataset[:train_portion]
-    test_data = dataset[train_portion : train_portion + test_portion]
-    val_data = dataset[train_portion + test_portion :]
-
-    return train_data, test_data, val_data
-
-
-def create_dataloaders(train_data, test_data, val_data, tokenizer, config):
-    """
-    Create dataloaders for the training, testing, and validation sets.
-
-    Parameters
-    ----------
-    train_data : list
-        The training set.
-    test_data : list
-        The testing set.
-    val_data : list
-        The validation set.
-    tokenizer : object
-        The tokenizer object to encode the data.
-    config : dict
-        The configuration dictionary.
-
-    Returns
-    -------
-    train_dataloader : torch.utils.data.DataLoader
-        The dataloader for the training set.
-    test_dataloader : torch.utils.data.DataLoader
-        The dataloader for the testing set.
-    val_dataloader : torch.utils.data.DataLoader
-        The dataloader for the validation set.
-    """
-
-    torch.manual_seed(config["seed"])
-
-    eval_batch_size = config["eval_batch_size"]
-    batch_size = config["batch_size"] // config.get("gradient_accumulation_steps", 1)
-
-    collate_fn = functools.partial(
-        custom_collate_fn,
-        allowed_max_length=config["max_seq_len"],
-    )
-
-    train_dataset = InstructionDataset(train_data, tokenizer)
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=collate_fn,
-        drop_last=True,
-    )
-
-    test_dataset = InstructionDataset(test_data, tokenizer)
-    test_dataloader = torch.utils.data.DataLoader(
-        test_dataset,
-        batch_size=eval_batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        drop_last=False,
-    )
-
-    val_dataset = InstructionDataset(val_data, tokenizer)
-    val_dataloader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=eval_batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        drop_last=False,
-    )
-
-    return {
-        "train": train_dataloader,
-        "test": test_dataloader,
-        "val": val_dataloader,
-    }
-
-
-def load_tokenizer():
-    """
-    Load the tokenizer from the specified path.
-
-    Parameters
-    ----------
-    tokenizer_path : str
-        The path to the tokenizer file.
-
-    Returns
-    -------
-    tokenizer : object
-        The tokenizer object.
-    """
-
-    tokenizer_file_path = hf_hub_download(
-        repo_id="meta-llama/Meta-Llama-3-8B",
-        filename="original/tokenizer.model",
-        local_dir="Llama-3.2-1B",
-    )
-
-    tokenizer = Llama3Tokenizer(tokenizer_file_path)
-
-    return tokenizer
-
-
-def create_model(config):
-
-    model_cfg = model_configs[config["foundation_model"]]
-
-    model = Llama3(model_cfg)
-
-    weights_file = hf_hub_download(
-        repo_id=model_cfg["hf_load_info"]["repo_id"],
-        filename=model_cfg["hf_load_info"]["filename"],
-        local_dir=config["foundation_model"],
-    )
-
-    weights = load_file(weights_file)
-
-    load_hf_weights_into_llama(model, model_cfg, weights)
-
-    del weights
-
-    model = model.to(config["device"]).eval()
-
-    # if enable_lora:
-    #     # Freeze the parameters of the model.
-    #     for param in model.parameters():
-    #         param.requires_grad = False
-
-    #     # Replace the linear layers with LinearWithLora layers.
-    #     replace_linear_with_lora(model, 8, 16)
-
-    #     num_trainable_params = sum(
-    #         p.numel() for p in model.parameters() if p.requires_grad
-    #     )
-
-    #     print(f"Number of trainable parameters: {num_trainable_params}")
-
-    # if preload:
-    #     with open(GPT_ROOT / config["model_save_path"], "rb") as f:
-    #         model.load_state_dict(torch.load(f))
-
-    return model
-
-
-def finetune_llama(config, model, dataloaders, tokenizer, test_data):
-
-    if config["log_to_clearml"]:
-
-        task = Task.init(
-            project_name=config["project_name"],
-            task_name=config["experiment_name"],
-            task_type="training",
-        )
-
-        task.connect(flatten_dict(config))
-
-    train_dataloader = dataloaders["train"]
-    val_dataloader = dataloaders["val"]
-
-    if config.get("use_explicit_bfloat16", False):
-        model = model.to(torch.bfloat16)
-
-    ########################################################################
-    ########################################################################
-    ################## FINETUNE THE FOUNDATION MODEL #######################
-    ########################################################################
-    ########################################################################
-
-    torch.manual_seed(config["seed"])
-
-    model = llama_trainer(
-        config,
-        model,
-        train_dataloader,
-        val_dataloader,
-        tokenizer,
-        test_data,
-        # num_epochs=config["num_epochs"],
-        num_train_iters=config["num_train_iters"],
-        eval_freq=config["eval_freq"],
-        generation_freq=config["generation_freq"],
-        device=get_device(),
-    )
-
-    # Save the weights
-    with open(GPT_ROOT / config["model_save_path"], "wb") as f:
-        torch.save(model.state_dict(), f)
-
-    return model
-
-
-def compute_results(config, model, tokenizer, test_data):
-
-    model.enable_kv_caching()
-
-    for entry in test_data[:3]:
-        prompt = format_w_alpaca(entry)
-
-        generate_response(model, tokenizer, prompt, get_device())
-
-    # Generate the test data.
-    for i, entry in tqdm(
-        enumerate(test_data),
-        total=len(test_data),
-        desc="Generating responses",
-        dynamic_ncols=True,
-    ):
-        test_data[i]["model_response"] = generate_response(
-            model,
-            tokenizer,
-            format_w_alpaca(entry),
-            "cuda" if torch.cuda.is_available() else "cpu",
-            print_input=False,
-        )[len(format_w_alpaca(entry)) :].strip()
-
-    # Save the responses
-    with open(GPT_ROOT / config["responses_save_path"], "w") as file:
-        json.dump(test_data, file, indent=4)
-
-    return test_data
-
-
-def benchmark_responses(test_data):
-    scores, feedbacks = evaluate_with_promestheus(test_data)
-
-    return scores
-
-
-if __name__ == "__main__":
-
-    ##########################################################################
-    #################### DEFINE THE EXPERIMENT CONFIG ########################
-    ##########################################################################
-
-    experiment_descriptor = "llama3.2-1B-ft-alpaca-70k-epochs"
-
-    full_alpaca_config = FineTuningConfig(
-        project_name="llama-instruction-finetuning",
-        experiment_name=f"{experiment_descriptor}",
-        data_path="data/alpaca_data_cleaned.json",
-        max_seq_len=512,
-        drop_rate=0.0,
-        qkv_bias=True,
-        device="cuda",
-        foundation_model="llama_3_2_1B",
-        tokenizer="gpt2",
-        seed=100,
-        lr=2.5e-5,
-        batch_size=128,
-        lr_scheduling={
-            "init_lr": 0,
-            "warmup_percentage": 0.04,
-            "eta_min": 2.5e-6,
-        },
-        # num_epochs=2,
-        num_train_iters=70000,
-        eval_batch_size=4,
-        gradient_accumulation_steps=128,
-        eval_freq=5000,
-        print_memory_usage=False,
-        generation_freq=None,
-        responses_save_path=f"results/responses_w_finetuned_{experiment_descriptor}.json",
-        model_save_path=f"checkpoints/finetuned_{experiment_descriptor}.pth",
-        log_to_clearml=False,
-        enable_gradient_checkpointing=True,
-        use_bf16=True,
-        use_explicit_bfloat16=False,
-        use_8bit_optim=True,
-    )
-
-    config = full_alpaca_config.__dict__
-
-    # Download the data
-    data = load_data(full_alpaca_config.data_path)
-
-    # Split the data
-    train_data, test_data, val_data = split_data(data)
-
-    # Load the tokenizer
-    tokenizer = load_tokenizer()
-
-    # Create the dataloaders
-    dataloaders = create_dataloaders(train_data, test_data, val_data, tokenizer, config)
-
-    model = create_model(config)
-
-    # # Finetune the model
-    model = finetune_llama(config, model, dataloaders, tokenizer, test_data)
-
-    # # Persist the model and results
-    test_data = compute_results(config, model, tokenizer, test_data)
-
-    # This frees up the space for prom-eval to run on the GPU.
-    del model
-
-    torch.cuda.empty_cache()
-    gc.collect()
-
-    #
-    # # Benchmark the responses
-    scores = benchmark_responses(test_data)

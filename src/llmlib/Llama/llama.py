@@ -7,9 +7,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
+from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 from torch.utils.checkpoint import checkpoint_sequential
 
+from llmlib import GPT_ROOT
 from llmlib.Llama.preloaded_llama import load_hf_weights_into_llama
 from llmlib.Llama.tokenizers import Llama3Tokenizer
 from llmlib.utils.models import model_configs
@@ -260,6 +262,13 @@ class CausalAttention(nn.Module):
         v = v.view(b, t, self._n_kv_groups, self._head_dim)
 
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+
+        if self._enable_kv_caching:
+            # Check if start_pos + t is greater than the context length.
+            if start_pos + t > self._context_length:
+                start_pos = self._context_length - t
+                self.k_cache = torch.roll(self.k_cache, -t, dims=2)
+                self.v_cache = torch.roll(self.v_cache, -t, dims=2)
 
         k = compute_rope(
             k, self.cos[start_pos : start_pos + t], self.sin[start_pos : start_pos + t]
@@ -530,10 +539,11 @@ class Llama3(nn.Module):
 
             if self._kv_caching_enabled:
                 start = end
+            else:
+                if end > context_length:
+                    start += 1
 
             end += 1
-
-            end = min(end, context_length)
 
             if eos_id is not None and next_inp_tk_id.item() in eos_id:
                 break
@@ -685,8 +695,12 @@ def merge_lora_weights(linear_with_lora: LinearWithLORA):
     return linear
 
 
-rank = 16
-alpha = 16
+def replace_lora_with_linear(model):
+    for name, module in model.named_children():
+        if isinstance(module, LinearWithLORA):
+            setattr(model, name, merge_lora_weights(module))
+        else:
+            replace_lora_with_linear(module)
 
 
 def replace_linear_with_lora(model, rank, alpha):
@@ -697,15 +711,50 @@ def replace_linear_with_lora(model, rank, alpha):
             replace_linear_with_lora(module, rank, alpha)
 
 
-# # Calculate the number of trainable parameters in the model
-# num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-# print("The number of trainable parameters in the model is:", num_params)
+def create_llama3_model(config):
 
-# # Freeze the model
-# for param in model.parameters():
-#     param.requires_grad = False
+    model_cfg = model_configs[config["foundation_model"]]
 
-# replace_linear_with_lora(model, rank, alpha)
+    model = Llama3(model_cfg)
 
-# num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-# print("The number of trainable parameters in the model is:", num_params)
+    # weights_file = hf_hub_download(
+    #     repo_id=model_cfg["hf_load_info"]["repo_id"],
+    #     filename=model_cfg["hf_load_info"]["filename"],
+    #     local_dir=config["foundation_model"],
+    # )
+
+    # weights = load_file(weights_file)
+
+    from transformers import AutoModelForCausalLM
+
+    hf_model = AutoModelForCausalLM.from_pretrained(
+        model_cfg["hf_load_info"]["repo_id"]
+    )
+
+    weights = hf_model.state_dict()
+
+    load_hf_weights_into_llama(model, model_cfg, weights)
+
+    del weights
+
+    if config.get("preload_model", False):
+        with open(GPT_ROOT / config["model_save_path"], "rb") as f:
+            model.load_state_dict(torch.load(f))
+
+    if config.get("enable_lora", False):
+        # Freeze the parameters of the model.
+        for param in model.parameters():
+            param.requires_grad = False
+
+        # Replace the linear layers with LinearWithLora layers.
+        replace_linear_with_lora(model, 8, 16)
+
+        num_trainable_params = sum(
+            p.numel() for p in model.parameters() if p.requires_grad
+        )
+
+        print(f"Number of trainable parameters: {num_trainable_params}")
+
+    model = model.to(config["device"]).eval()
+
+    return model

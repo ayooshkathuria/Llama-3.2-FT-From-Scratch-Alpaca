@@ -10,14 +10,22 @@ from llmlib.utils.models import query_ollama_model
 from llmlib.utils.prompts import JUDGE_SFT_PROMPT, format_w_alpaca
 
 
-def generate_response(gpt_model, tokenizer, prompt, device, print_input=True):
+def generate_response(
+    gpt_model,
+    tokenizer,
+    prompt,
+    device,
+    max_new_tokens=256,
+    context_length=512,
+    print_input=True,
+):
 
     prompt_tk_ids = torch.Tensor(tokenizer.encode(prompt)).to(device)
 
     generated_text = gpt_model.generate(
-        max_new_token=256,
+        max_new_token=max_new_tokens,
         inp_tk_ids=prompt_tk_ids,
-        context_length=256,
+        context_length=context_length,
         eos_id=[128001],
     )
 
@@ -60,13 +68,6 @@ def evaluate_w_ollama(test_data, model_name="llama3.1", prompt=JUDGE_SFT_PROMPT)
 
         answer = query_ollama_model(prompt_to_evaluator_llm, model_name)
 
-        # try:
-        #     score = int(answer)
-        #     scores.append(score)
-        # except ValueError:
-        #     # print(f"Could not convert score: {answer}")
-        #     score = None
-
         score = extract_judge_score(answer)
 
         if score is not None:
@@ -87,15 +88,6 @@ def evaluate_with_promestheus(test_data):
     # Load the model.
     model = VLLM(model="prometheus-eval/prometheus-7b-v2.0", max_model_len=2048)
     judge = PrometheusEval(model=model, absolute_grade_template=ABSOLUTE_PROMPT)
-
-    # rubric_data = {
-    #     "criteria": "Does the response adhere to the instructions, demonstrating clarity, relevance, correctness, and conciseness?",
-    #     "score1_description": "The response fails to address the instructions, providing irrelevant, incorrect, or excessively verbose information that detracts from the user's request.",
-    #     "score2_description": "The response partially addresses the instructions but includes significant inaccuracies, irrelevant details, or excessive elaboration that detracts from the main task.",
-    #     "score3_description": "The response follows the instructions with some minor inaccuracies or omissions. It is generally relevant and clear, but may include some unnecessary details or could be more concise.",
-    #     "score4_description": "The response adheres to the instructions, offering clear, accurate, and relevant information in a concise manner, with only occasional, minor instances of excessive detail or slight lack of clarity.",
-    #     "score5_description": "The response fully adheres to the instructions, providing a clear, accurate, and relevant answer in a concise and efficient manner. It addresses all aspects of the request without unnecessary details or elaboration.",
-    # }
 
     rubric_data = {
         "criteria": "Ability to follow the instruction while providing semantically valid and relevant information without being penalized for deviating from the reference response.",
@@ -125,30 +117,3 @@ def evaluate_with_promestheus(test_data):
     print(f"The average score is {sum(scores) / len(scores):.2f}")
 
     return scores, feedbacks
-
-
-if __name__ == "__main__":
-    # import json
-
-    # from llmlib import GPT_ROOT
-
-    # test_data_1 = json.load(open(GPT_ROOT / "data/responses_w_pretrained_model.json"))
-
-    # test_data_2 = json.load(open(GPT_ROOT / "data/responses_w_finetuned_model.json"))
-
-    # test_data_3 = json.load(open(GPT_ROOT / "data/responses_with_gt.json"))
-
-    # model_name = "llama3.1"
-
-    # evaluate_w_ollama(test_data_1, model_name=model_name, prompt=JUDGE_SFT_PROMPT)
-
-    # evaluate_w_ollama(test_data_2, model_name=model_name, prompt=JUDGE_SFT_PROMPT)
-
-    # evaluate_w_ollama(test_data_3, model_name=model_name, prompt=JUDGE_SFT_PROMPT)
-
-    test_data_path = "data/responses_w_finetuned_gpt2-xl-alpaca.json"
-    import json
-
-    test_data = json.load(open(test_data_path))
-
-    scores, feedbacks = evaluate_with_promestheus(test_data)

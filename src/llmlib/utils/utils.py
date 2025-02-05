@@ -34,22 +34,103 @@ def generate_random_string(length=6):
 
 @dataclass
 class FineTuningConfig:
+    """
+    Parameters
+    ----------
+    project_name : str
+        Name of the project.
+    experiment_name : str
+        Name of the experiment. A random string will be appended to this.
+    data_path : str
+        Path to the training data.
+    max_seq_len : int
+        Maximum sequence length for input tokens.
+    drop_rate : float
+        Dropout rate to use in the model.
+    qkv_bias : bool
+        Whether to use bias in QKV attention calculations.
+    device : str
+        Device to run training on ('cpu', 'cuda', etc.).
+    foundation_model : str
+        Name/type of the base model to fine-tune. The list of available models can be found in the
+        `model_configs` dictionary. from the `llmlib.utils.models` module.
+    seed : int
+        Random seed for reproducibility.
+    lr : float
+        Learning rate for training.
+    lr_scheduling : dict
+        Learning rate scheduling configuration.
+    batch_size : int
+        Training batch size.
+    max_gen_tokens : int, optional
+        Maximum number of tokens to generate during inference. Defaults to 256.
+    weight_decay : float, optional
+        Weight decay coefficient. Defaults to 0.01.
+    inference_only : bool, optional
+        Whether to run in inference-only mode. Defaults to False.
+    preload_model : bool, optional
+        Whether to preload the model. Defaults to False.
+    enable_lora : bool, optional
+        Whether to enable LoRA fine-tuning. Defaults to False.
+    num_epochs : int or None, optional
+        Number of training epochs. Defaults to None.
+    num_train_iters : int or None, optional
+        Number of training iterations. Defaults to None.
+    eval_batch_size : int or None, optional
+        Batch size for evaluation. Defaults to training batch_size.
+    gradient_accumulation_steps : int, optional
+        Number of gradient accumulation steps. Defaults to 1.
+    eval_freq : int or None, optional
+        Frequency of evaluation in iterations. Defaults to None.
+    print_memory_usage : bool, optional
+        Whether to print memory usage statistics. Defaults to False.
+    generation_freq : int or None, optional
+        Frequency of text generation in iterations. Defaults to None.
+    responses_save_path : str or None, optional
+        Path to save generated responses. Defaults to None.
+    model_save_path : str or None, optional
+        Path to save model checkpoints. Defaults to None.
+    log_to_clearml : bool, optional
+        Whether to log metrics to ClearML. Defaults to False.
+    enable_gradient_checkpointing : bool, optional
+        Whether to enable gradient checkpointing. Defaults to False.
+    use_bf16 : bool, optional
+        Whether to use bfloat16 precision. Defaults to False.
+    use_explicit_bfloat16 : bool, optional
+        Whether to explicitly use bfloat16 dtype. Defaults to False.
+    use_8bit_optim : bool, optional
+        Whether to use 8-bit optimization. Defaults to False.
+    use_ollama_for_eval : bool, optional
+        Whether to use OLLAMA for evaluation. Defaults to False.
+    ollama_model_name : str, optional
+        Name of the OLLAMA model to use. Defaults to 'llama3.1'.
+
+    Notes
+    -----
+
+    - Either num_train_iters or num_epochs must be provided, but not both.
+     - If lr_scheduling is provided, init_lr and eta_min will default to lr if not specified.
+     - Model-specific configurations from model_configs will be added to the instance attributes.
+
+    """
+
     project_name: str
     experiment_name: str
     data_path: str
-    # vocab_size: int
-    # context_length: int
     max_seq_len: int
     drop_rate: float
     qkv_bias: bool
     device: str
     foundation_model: str
-    tokenizer: str
     seed: int
     lr: float
     lr_scheduling: dict
     batch_size: int
+    max_gen_tokens: int = 256
     weight_decay: float = 0.01
+    inference_only: bool = False
+    preload_model: bool = False
+    enable_lora: bool = False
     num_epochs: int | None = None
     num_train_iters: int | None = None
     eval_batch_size: int | None = None
@@ -63,8 +144,9 @@ class FineTuningConfig:
     enable_gradient_checkpointing: bool = False
     use_bf16: bool = False
     use_explicit_bfloat16: bool = False
-    use_deepspeed: bool = False
     use_8bit_optim: bool = False
+    use_ollama_for_eval: bool = False
+    ollama_model_name: str = "llama3.1"
 
     def __post_init__(self):
         # Generate a random string of 6 characters and suffix it to

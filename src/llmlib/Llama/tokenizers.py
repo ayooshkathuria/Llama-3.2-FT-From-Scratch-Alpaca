@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import tiktoken
+from huggingface_hub import hf_hub_download
 from tiktoken.load import load_tiktoken_bpe
 
 
@@ -57,3 +58,29 @@ class Llama3Tokenizer:
 
     def decode(self, tokens):
         return self.model.decode(tokens)
+
+
+def load_llama3_tokenizer():
+    """
+    Load the tokenizer from the specified path.
+
+    Parameters
+    ----------
+    tokenizer_path : str
+        The path to the tokenizer file.
+
+    Returns
+    -------
+    tokenizer : object
+        The tokenizer object.
+    """
+
+    tokenizer_file_path = hf_hub_download(
+        repo_id="meta-llama/Meta-Llama-3-8B",
+        filename="original/tokenizer.model",
+        local_dir="Llama-3.2-1B",
+    )
+
+    tokenizer = Llama3Tokenizer(tokenizer_file_path)
+
+    return tokenizer
